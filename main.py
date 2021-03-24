@@ -107,14 +107,13 @@ class NMEASaver(Thread):
 
 
 class NMEALogger(Thread):
-    def __init__(self, *, port: str, baudrate: int, nickname: str, qp: Queue, name: str):
+    def __init__(self, *, port: str, baudrate: int, qp: Queue, name: str):
         super().__init__()
         self.daemon = True
         self.name = name
 
         self.port = port
         self.baudrate = baudrate
-        self.nickname = nickname
         self.qp = qp
 
         self.counter = 0
@@ -155,7 +154,7 @@ class Main(object):
         self.saver = NMEASaver(dbFile=filename, bufferSize=64)
         if self.saver.isReady:
             self.saver.start()
-            self.collector = NMEALogger(port='COM4', baudrate=9600, nickname='GPS', qp=self.saver.entryQueue, name='GPS')
+            self.collector = NMEALogger(port='COM4', baudrate=9600, qp=self.saver.entryQueue, name='GPS')
             if self.collector.isReady:
                 self.collector.start()
                 time.sleep(60 * 5)
