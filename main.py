@@ -33,16 +33,6 @@ class NMEASaver(Thread):
 
         self.dateFormat = f'%Y-%m-%d %H:%M:%S.%f'
 
-        self.initScript = """
-            create table if not exists nmea
-            (
-                id INTEGER default 0 not null primary key autoincrement unique,
-                at TEXT default '' not null,
-                type TEXT default '' not null,
-                body blob default '' not null
-            );
-        """
-
         self.isReady = True
         self.dbFile = pathlib.Path(dbFile)
         if self.dbFile.exists() is False:
@@ -52,12 +42,25 @@ class NMEASaver(Thread):
         else:
             logger.info(f'using [{dbFile}]')
 
+    def __del__(self):
+        logger.info(f'Bye bye!')
+
     def prepare(self) -> bool:
         success = True
+        initScript = """
+            create table if not exists nmea
+            (
+                id INTEGER default 0 not null primary key autoincrement unique,
+                at TEXT default '' not null,
+                type TEXT default '' not null,
+                body blob default '' not null
+            );
+        """
+
         try:
             with sqlite3.connect(self.dbFile) as db:
                 cursor = db.cursor()
-                cursor.execute(self.initScript)
+                cursor.execute(initScript)
                 db.commit()
         except (sqlite3.Error) as e:
             logger.error(e)
@@ -89,13 +92,16 @@ class NMEASaver(Thread):
         self.buffer.clear()
 
     def run(self) -> None:
-        while True:
+        while self.isReady:
             try:
                 package: Package = self.entryQueue.get(timeout=self.timeoutSecs)
             except (Empty) as e:
                 if self.buffer:
                     self.append()
                     logger.warning(e)
+            except (KeyboardInterrupt) as e:
+                logger.info(f'Quit')
+                break
             else:
                 logger.debug(package)
                 self.buffer.append(package)
@@ -127,12 +133,11 @@ class NMEALogger(Thread):
     def __del__(self):
         if self.isReady:
             self.sp.close()
-        logger.info(f'Bye!')
+        logger.info(f'See you again')
 
     def run(self) -> None:
         if self.isReady:
-            loop = True
-            while loop:
+            while self.isReady:
                 try:
                     line = self.sp.readline()
                     now = dt.now()
@@ -157,7 +162,16 @@ class Main(object):
             self.collector = NMEALogger(port='COM4', baudrate=9600, qp=self.saver.entryQueue, name='GPS')
             if self.collector.isReady:
                 self.collector.start()
-                time.sleep(60 * 5)
+                try:
+                    time.sleep(5)
+                except (KeyboardInterrupt) as e:
+                    logger.error(e)
+
+                self.collector.isReady = False
+                self.collector.join()
+
+                self.saver.isReady = False
+                self.saver.join()
 
 
 if __name__ == '__main__':
