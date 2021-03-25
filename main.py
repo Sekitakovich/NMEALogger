@@ -125,7 +125,7 @@ class NMEALogger(Thread):
         self.counter = 0
         self.isReady = True
         try:
-            self.sp = serial.Serial(port=self.port, baudrate=self.baudrate)
+            self.sp = serial.Serial(port=self.port, baudrate=self.baudrate, timeout=1)
         except (serial.SerialException) as e:
             self.isReady = False
             logger.error(e)
@@ -137,11 +137,11 @@ class NMEALogger(Thread):
 
     def run(self) -> None:
         if self.isReady:
-            while self.isReady:
+            while self.isReady:  # これだと下のreadlineでブロックされてしまうのが気に食わない
                 try:
                     line = self.sp.readline()
                     now = dt.now()
-                except (serial.SerialException) as e:
+                except (serial.SerialException, OSError, PermissionError) as e:
                     logger.error(e)
                     break
                 except (KeyboardInterrupt) as e:
@@ -163,7 +163,7 @@ class Main(object):
             if self.collector.isReady:
                 self.collector.start()
                 try:
-                    time.sleep(5)
+                    time.sleep(15)
                 except (KeyboardInterrupt) as e:
                     logger.error(e)
 
