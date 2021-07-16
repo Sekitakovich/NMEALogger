@@ -1,14 +1,26 @@
 import pathlib
 import time
 import serial
-from threading import Thread, Lock
-from queue import Queue, Empty
+# from threading import Thread as Multi, Lock
+from multiprocessing import Process as Multi, Lock, Queue
+# from queue import Queue
+from queue import Empty
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime as dt
 from typing import List
 
+import logging
+import sys
 from loguru import logger
+LoguruFormat = '<level>{time:MM-DD HH:mm:ss}|{level:<8}|{file}|{line}|{function}|{message}</level>'
+logger.remove()
+logger.add(
+    sys.stderr,
+    colorize=True,
+    level=logging.DEBUG,
+    format=LoguruFormat)
+
 
 
 @dataclass()
@@ -18,10 +30,11 @@ class Package(object):
     body: bytes
 
 
-class NMEASaver(Thread):
-    def __init__(self, *, dbFile: str, bufferSize: int=1024, timeoutSecs=5):
+class NMEASaver(Multi):
+    def __init__(self, *, dbFile: str, bufferSize: int = 1024, timeoutSecs=5):
         super().__init__()
         self.daemon = True
+        self.name = f'Saver'
 
         self.locker = Lock()
         self.entryQueue = Queue()
@@ -86,7 +99,7 @@ class NMEASaver(Thread):
             logger.error(e)
         else:
             te = dt.now()
-            secs = (te-ts).total_seconds()
+            secs = (te - ts).total_seconds()
             logger.info(f'append {volume} records in {secs} secs')
         self.counter = 0
         self.buffer.clear()
@@ -112,7 +125,7 @@ class NMEASaver(Thread):
                     pass
 
 
-class NMEALogger(Thread):
+class NMEALogger(Multi):
     def __init__(self, *, port: str, baudrate: int, qp: Queue, name: str):
         super().__init__()
         self.daemon = True
@@ -121,11 +134,13 @@ class NMEALogger(Thread):
         self.port = port
         self.baudrate = baudrate
         self.qp = qp
+        self.timeoutSec = 5
+        self.missing = False
 
         self.counter = 0
         self.isReady = True
         try:
-            self.sp = serial.Serial(port=self.port, baudrate=self.baudrate, timeout=1)
+            self.sp = serial.Serial(port=self.port, baudrate=self.baudrate, timeout=self.timeoutSec)
         except (serial.SerialException) as e:
             self.isReady = False
             logger.error(e)
@@ -137,33 +152,44 @@ class NMEALogger(Thread):
 
     def run(self) -> None:
         if self.isReady:
-            while self.isReady:  # これだと下のreadlineでブロックされてしまうのが気に食わない
+            while self.isReady:
                 try:
                     line = self.sp.readline()
-                    now = dt.now()
                 except (serial.SerialException, OSError, PermissionError) as e:
                     logger.error(e)
                     break
+                # except (TimeoutError) as e:
+                #     logger.warning(e)
                 except (KeyboardInterrupt) as e:
                     logger.info(f'Quit')
                     break
                 else:
-                    package = Package(type=self.name, body=line, at=now)
-                    self.qp.put(package)
+                    if line:
+                        now = dt.now()
+                        package = Package(type=self.name, body=line, at=now)
+                        self.qp.put(package)
+                        if self.missing is True:
+                            self.missing = False
+                    else:
+                        if self.missing is False:
+                            logger.warning(f'timeout ({self.timeoutSec})')
+                            self.missing = True
 
 
 class Main(object):
     def __init__(self):
+        # port = f'/dev/ttyAMA0'
+        port = f'/dev/ttyACM0'
         name = dt.now().strftime('%Y-%m-%d')
         filename = f'{name}.db'
         self.saver = NMEASaver(dbFile=filename, bufferSize=64)
         if self.saver.isReady:
             self.saver.start()
-            self.collector = NMEALogger(port='COM4', baudrate=9600, qp=self.saver.entryQueue, name='GPS')
+            self.collector = NMEALogger(port=port, baudrate=9600, qp=self.saver.entryQueue, name='GPS')
             if self.collector.isReady:
                 self.collector.start()
                 try:
-                    time.sleep(15)
+                    time.sleep(60)
                 except (KeyboardInterrupt) as e:
                     logger.error(e)
 
